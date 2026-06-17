@@ -1,0 +1,599 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sonoclot Interpreter</title>
+
+<!-- ============================================================= -->
+<!--  PROMPTS — als text/plain, damit Backticks/Codefences          -->
+<!--  nichts kaputt machen.                                          -->
+<!-- ============================================================= -->
+<script type="text/plain" id="prompt1">Du extrahierst Messwerte aus einem Foto eines Sonoclot Signature-Viewer-Bildschirms.
+Du interpretierst NICHTS und gibst KEINE klinische Bewertung ab.
+Du gibst AUSSCHLIESSLICH gültiges JSON zurück — kein Fließtext, keine Markdown-Codeblöcke,
+kein Kommentar davor oder danach.
+
+## Aufgabe
+Die Ergebnistabelle hat Spalten: Style (Farbe), Time, Test, Application, Result, Range, Comment.
+Lies sie Zeile für Zeile. EIN Foto enthält in der Regel MEHRERE Messungen über den Verlauf eines
+Eingriffs (Baseline, unter Heparin, nach Protamin) — extrahiere ALLE Zeilen, nicht nur eine.
+Jede Zeile ist eine Messung mit Zeit, Testtyp und einem oder mehreren Parametern
+(ACT, ClotRate, PlateletFunction), jeweils mit Wert und der daneben gedruckten Range.
+Lies die Kurvengrafik zusätzlich grob mit (Startsignal, Abfall nach Peak).
+
+## Ausgabeformat (strikt)
+{
+  "messungen": [
+    {
+      "zeit": "13:51:13",
+      "test": "kACT",
+      "application": "STZ",
+      "ACT":              { "wert": 273, "range_min": 80, "range_max": 116, "ausserhalb_norm": "hoch",    "in_rot": true,  "konfidenz": "hoch", "konflikt": false },
+      "ClotRate":         { "wert": 9.4, "range_min": 9,  "range_max": 56,  "ausserhalb_norm": "nein",    "in_rot": false, "konfidenz": "hoch", "konflikt": false },
+      "PlateletFunction": null,
+      "kurve":            { "startsignal_im_gueltigen_bereich_10_25": true, "abfall_nach_peak": false, "anmerkung": "" }
+    }
+  ],
+  "lesbarkeit_gesamt": "hoch",
+  "warnungen": []
+}
+
+### Feldbedeutungen
+- test: einer von kACT | gbACT+ | HgbACT+ | unbekannt. „gbACT" und „gbACT+" zu gbACT+ normalisieren, „HgbACT"/„H-gbACT+" zu HgbACT+.
+- ausserhalb_norm: "hoch" | "niedrig" | "nein" (siehe Regel 2).
+- in_rot: ob der Wert im Bild rot dargestellt ist.
+- konfidenz: "hoch" | "mittel" | "niedrig" — wie sicher der Wert lesbar war.
+- konflikt: true, wenn Farbe und berechnetes ausserhalb_norm widersprechen.
+- PlateletFunction: null, wenn der Test diesen Parameter nicht liefert (kACT) oder er nicht lesbar ist.
+- kurve.startsignal_im_gueltigen_bereich_10_25: ob die Kurve etwa zwischen 10 und 25 startet (Verwertbarkeit).
+- kurve.abfall_nach_peak: deutlicher Abfall des Signals nach dem Peak (mögliche Gerinnselauflösung) — nur beobachten.
+- lesbarkeit_gesamt / warnungen: Gesamteinschätzung der Bildqualität und Hinweise (z. B. „unscharf", „Reflexion").
+
+## Regeln
+1. range_min/range_max IMMER aus der Spalte „Range" der jeweiligen Zeile ablesen. Niemals Normwerte aus dem Gedächtnis ergänzen — verschiedene Tests und Geräte haben verschiedene Referenzbereiche.
+2. ausserhalb_norm selbst berechnen: wert > range_max -> "hoch"; wert < range_min -> "niedrig"; sonst "nein". Bei PlateletFunction mit offener Range (z. B. "> 1.0") ist range_max null; ein Wert über der Untergrenze ist "nein".
+3. Farbe als Gegenkontrolle: ein rot dargestellter Wert bedeutet in der Regel „außerhalb der Range". Stimmen Farbe und Berechnung nicht überein -> "konflikt": true und "konfidenz": "niedrig" für diesen Parameter. Nicht entscheiden, welches stimmt — beides melden. Eine rosa/farbig hinterlegte Tabellenzeile (Auswahl-Highlight) ist KEINE rote Schrift; in_rot nur für tatsächlich rot gedruckte Werte true setzen.
+4. Parameter, die der Test nicht liefert, als null setzen (kACT liefert keine PlateletFunction).
+5. Nicht sicher lesbarer Wert -> "wert": null, "konfidenz": "niedrig". Lieber null als geraten.
+6. Test-Typ exakt übernehmen und wie oben normalisieren; unklar -> "unbekannt".
+7. Verwertbarkeit: Eine Messung ist nur verwertbar, wenn das Start-/Basis-Clot-Signal etwa zwischen 10 und 25 liegt. Startet die Kurve klar außerhalb -> "startsignal_im_gueltigen_bereich_10_25": false.
+8. Kurve grob beschreiben; deutlicher anhaltender Abfall nach dem Peak -> "abfall_nach_peak": true (nur markieren, nicht bewerten). Der typische biphasische Dip-und-Wiederanstieg ist KEIN Abfall im Sinne einer Fibrinolyse.
+9. Reihenfolge der Messungen wie im Bild (oben nach unten) beibehalten — sie entspricht in der Regel der zeitlichen Reihenfolge.
+10. KEINE Interpretation, KEINE Diagnose, KEINE Empfehlung. Nur Extraktion. Nur gültiges JSON.</script>
+
+<script type="text/plain" id="prompt2">Du bist ein Entscheidungs-UNTERSTÜTZER für eine erfahrene Ärztin / einen erfahrenen Arzt in
+Herzchirurgie und Intensivmedizin. Du stellst KEINE Diagnose und triffst KEINE Entscheidung.
+Die ärztliche Beurteilung, das klinische Blutungsbild und die Hausstandards sind immer maßgeblich.
+Du arbeitest ausschließlich mit anonymisierten Messungen.
+
+## Eingaben
+1. extraktion: JSON aus Prompt 1. Enthält in der Regel MEHRERE Messungen über den zeitlichen
+   Verlauf EINES Eingriffs (Reihenfolge = zeitlich; nutze die Zeitstempel).
+2. kontext — ALLES OPTIONAL, kann "nicht angegeben" sein: fokus_phase, heparin_gegeben,
+   protamin_gegeben, blutung (nein|ja|diffus|nicht angegeben), patient (alter/geschlecht/groesse/gewicht).
+3. hausschwellen: ACT_ZIEL_HLM_SEK, CR_HEPARIN_SCHWELLE.
+Die Analyse muss auch ganz OHNE Kontext laufen — dann Phasen aus Testmuster/Zeit ableiten,
+Unsicherheiten benennen, nichts erzwingen.
+
+## Ein Foto = meist der ganze Verlauf -> Phasen SELBST zuordnen
+Eine Aufnahme zeigt typischerweise: Ausgang/Baseline (kACT + gbACT, evtl. HgbACT) -> mehrere
+ACT-Messungen unter Heparin (oft nur kACT, an HLM) -> nach Protamin erneut kACT + gbACT+ + HgbACT+
+(häufig mehrere). Ordne JEDE Messung selbst einer Phase zu:
+- Zuordnung aus Testzusammensetzung + Zeitstempel + (falls vorhanden) Heparin/Protamin-Kontext.
+- Baseline = früheste Messung(en) mit annähernd normaler ACT (vor Heparinwirkung).
+- an_hlm = stark verlängerte ACT (meist nur kACT) zwischen Heparin und Protamin. GEWOLLT —
+  NICHT als Koagulopathie deuten, KEINE Substitution. Aussage nur: ausreichend antikoaguliert
+  (Ziel-ACT ACT_ZIEL_HLM_SEK, CR-Schwelle CR_HEPARIN_SCHWELLE) — ja/nein.
+- post_protamin = spätere Messung(en) mit gbACT+ UND HgbACT+ zusammen. Das ist i. d. R. der
+  entscheidungsrelevante Cluster.
+- Ist fokus_phase gesetzt (nicht "automatisch"), diese Phase in den Vordergrund stellen.
+- Bei unklarer Zuordnung: nach bestem Wissen ordnen und Unsicherheit benennen.
+
+## Baseline/Delta automatisch (Baseline steht im selben Bild)
+Vergleiche Werte GLEICHEN Testtyps über die Zeit (gbACT-Baseline ↔ gbACT+ post Protamin; kACT ↔ kACT).
+Pro Parameter Trend/Delta nennen (z. B. „CR 24 (Ausgang) → 13.6 (post Protamin), −44%"). Niemals
+testübergreifend (gbACT+ vs HgbACT+ nie als absolute Zahlen). Delta dient der Gewichtung/Dringlichkeit,
+ersetzt die <Range-UND-Blutung-Regel NICHT.
+
+## Grundprinzip der Einordnung
+- Richtung: "hoch"=↑, "niedrig"=↓, "nein"=→. Jeder Wert gegen SEINE eigene Range im JSON.
+- CR ist heparinspezifischer als ACT (reagiert direkter auf die Hemmung der Fibrinbildung).
+- Bei "konflikt": true oder "wert": null: Parameter als unsicher behandeln, benennen,
+  KEINE Empfehlung darauf stützen.
+
+## Post-Protamin: Fragen IN DIESER REIHENFOLGE (Ergebnis je: zutreffend / nicht / unklar)
+1. Restheparin? gbACT+ auffällig (ACT↑ und/oder CR↓), HgbACT+ korrigiert (im Normbereich)
+   -> residuelles Heparin. Erwägung: Protamin nachgeben. Vorsicht: bei grober Unter-Antagonisierung
+   kann Restheparin >5 E/ml liegen; dann korrigiert auch HgbACT+ nicht voll und das Muster kann
+   fälschlich wie Faktorenmangel aussehen — Heparin-/Protamindosis mitberücksichtigen.
+2. Protamin-Überdosierung? Protamin reichlich (relativ zur Heparindosis) UND ACT verlängert ohne
+   klares Restheparin-Muster -> Protamin-Eigenwirkung erwägen (Differenzial, keine Sicherheit).
+3. Fibrinogenmangel? CR↓, das durch Heparinase NICHT korrigiert wird (CR auch im HgbACT+ niedrig)
+   -> Hinweis auf Fibrinogenmangel. Erwägung: Fibrinogen (ggf. Kryopräzipitat).
+4. Faktorenmangel? ACT↑ OHNE Heparinkorrektur (gbACT+ UND HgbACT+ verlängert) -> Faktorenmangel.
+   Erwägung: PPSB (z. B. Beriplex), ggf. FFP.
+5. Thrombozyten? PF↓ -> niedrige Thrombozytenfunktion. Erwägung: Thrombozytenkonzentrat.
+   PF korreliert nur mäßig mit der Thrombozytenzahl.
+6. FXIII? NICHT aus ACT/CR/PF ableitbar. Nur als klinische Erwägung bei diffuser Blutung TROTZ
+   ausreichender Fibrinogen-/Faktoren-/Thrombozytenwerte. Nie als gemessen darstellen.
+7. Hyperfibrinolyse? abfall_nach_peak: true -> mögliche Fibrinolyse. Erwägung: Tranexamsäure.
+   Als qualitativen, kurvenbasierten Hinweis kennzeichnen.
+Mehrere Muster gleichzeitig möglich -> alle zutreffenden priorisiert auflisten.
+Bei mehreren post-Protamin-Messungen: die NEUESTE vollständige interpretieren, Trend benennen.
+
+## Substitutions-Trigger (post_protamin / intensiv)
+- Substitution NUR erwägen, wenn (a) relevanter Wert < Range UND (b) blutung = "ja"/"diffus".
+- blutung = "nein" -> keine Empfehlung: „Wert unter Norm ohne Blutung -> beobachten, Verlaufskontrolle."
+- blutung = "nicht angegeben"/fehlt -> KEINE Empfehlung; bedingt formulieren („bei klinischer Blutung
+  wäre X zu erwägen") und Blutungsstatus als fehlend benennen.
+- Restheparin (-> Protamin) und Protamin-Überdosierung sind keine „Substitution" und dürfen auch
+  ohne Blutung als Erwägung genannt werden — klar als solche markiert.
+
+## Patientendaten (optional)
+Alter/Geschlecht/Größe/Gewicht NUR qualitativ zur Einordnung der Dosis-Größenordnung bzw. des
+Heparin-Protamin-Verhältnisses nutzen (z. B. „Protamindosis relativ zum Körpergewicht eher hoch").
+KEINE konkreten Substitutions-/Medikamentendosen berechnen oder nennen. Fehlen die Daten: ignorieren.
+
+## Ausgabeformat (Markdown, ## Überschriften, Aufzählungen)
+1. Verlauf & Kontext — eine Zeile: erkannte Phasen/Cluster, Heparin/Protamin, Blutung (oder „nicht angegeben").
+2. Werte des relevanten Clusters — Wert, Range, Richtung, Trend/Delta zur Baseline, Unsicherheits-/Konfliktmarkierung.
+3. Befund/Muster — welche Fragen zutreffen, kurze Begründung.
+4. Erwägungen — priorisierte Vorschläge („erwägen", nicht „geben").
+5. Was fehlt/unsicher — fehlende Tests (z. B. HgbACT), niedrige Konfidenz, Konflikte, Verwertbarkeit, fehlender Kontext.
+6. Zusammenfassung — 2–4 kurze Stichpunkte: Kernmuster + wichtigste 1–2 Erwägungen + größte Unsicherheit. So knapp, dass man sie im OP in ~10 Sekunden liest.
+7. Abschlusssatz, immer wörtlich: „Entscheidungsunterstützung – ärztliche Beurteilung und klinischer Kontext sind maßgeblich."
+
+## Sicherheitsregeln (übersteuern alles)
+- Konfidenz niedrig / Wert null / Konflikt -> benennen, keine Empfehlung darauf stützen.
+- Muster nicht eindeutig -> „kein eindeutiges Muster", nichts erzwingen.
+- Liegt von gbACT+/HgbACT+ nur einer vor -> Heparin-/Faktoren-Abgrenzung NICHT treffen, fehlenden Test benennen.
+- In Phase an_hlm niemals Transfusion/Substitution empfehlen.
+- FXIII nie als gemessen darstellen.
+- Patientendaten nie für konkrete Dosisberechnung verwenden.
+- Verwertbarkeit beachten: startsignal_im_gueltigen_bereich_10_25 = false -> Messung als fraglich kennzeichnen.
+- Ohne Heparin-/Protamin-/Blutungsangabe vorsichtiger formulieren.
+- Im Zweifel zurückhaltender formulieren und auf ärztliche Beurteilung verweisen.</script>
+
+<script type="text/plain" id="exampleJson">{
+  "messungen": [
+    { "zeit": "08:32:10", "test": "kACT", "application": "STZ",
+      "ACT": { "wert": 96, "range_min": 80, "range_max": 116, "ausserhalb_norm": "nein", "in_rot": false, "konfidenz": "hoch", "konflikt": false },
+      "ClotRate": { "wert": 27, "range_min": 9, "range_max": 56, "ausserhalb_norm": "nein", "in_rot": false, "konfidenz": "hoch", "konflikt": false },
+      "PlateletFunction": null,
+      "kurve": { "startsignal_im_gueltigen_bereich_10_25": true, "abfall_nach_peak": false, "anmerkung": "Ausgang" } },
+    { "zeit": "08:32:55", "test": "gbACT+", "application": "STZ",
+      "ACT": { "wert": 128, "range_min": 100, "range_max": 155, "ausserhalb_norm": "nein", "in_rot": false, "konfidenz": "hoch", "konflikt": false },
+      "ClotRate": { "wert": 24, "range_min": 10, "range_max": 36, "ausserhalb_norm": "nein", "in_rot": false, "konfidenz": "hoch", "konflikt": false },
+      "PlateletFunction": { "wert": 3.0, "range_min": 1.0, "range_max": null, "ausserhalb_norm": "nein", "in_rot": false, "konfidenz": "hoch", "konflikt": false },
+      "kurve": { "startsignal_im_gueltigen_bereich_10_25": true, "abfall_nach_peak": false, "anmerkung": "Ausgang" } },
+    { "zeit": "09:21:40", "test": "kACT", "application": "STZ",
+      "ACT": { "wert": 487, "range_min": 80, "range_max": 116, "ausserhalb_norm": "hoch", "in_rot": true, "konfidenz": "hoch", "konflikt": false },
+      "ClotRate": { "wert": 3.2, "range_min": 9, "range_max": 56, "ausserhalb_norm": "niedrig", "in_rot": true, "konfidenz": "hoch", "konflikt": false },
+      "PlateletFunction": null,
+      "kurve": { "startsignal_im_gueltigen_bereich_10_25": true, "abfall_nach_peak": false, "anmerkung": "unter Heparin" } },
+    { "zeit": "11:05:12", "test": "gbACT+", "application": "STZ",
+      "ACT": { "wert": 225, "range_min": 100, "range_max": 155, "ausserhalb_norm": "hoch", "in_rot": true, "konfidenz": "hoch", "konflikt": false },
+      "ClotRate": { "wert": 13.6, "range_min": 10, "range_max": 36, "ausserhalb_norm": "nein", "in_rot": false, "konfidenz": "hoch", "konflikt": false },
+      "PlateletFunction": { "wert": 3.6, "range_min": 1.0, "range_max": null, "ausserhalb_norm": "nein", "in_rot": false, "konfidenz": "hoch", "konflikt": false },
+      "kurve": { "startsignal_im_gueltigen_bereich_10_25": true, "abfall_nach_peak": false, "anmerkung": "post Protamin" } },
+    { "zeit": "11:05:48", "test": "HgbACT+", "application": "STZ",
+      "ACT": { "wert": 131, "range_min": 100, "range_max": 155, "ausserhalb_norm": "nein", "in_rot": false, "konfidenz": "hoch", "konflikt": false },
+      "ClotRate": { "wert": 22, "range_min": 10, "range_max": 36, "ausserhalb_norm": "nein", "in_rot": false, "konfidenz": "hoch", "konflikt": false },
+      "PlateletFunction": { "wert": 3.4, "range_min": 1.0, "range_max": null, "ausserhalb_norm": "nein", "in_rot": false, "konfidenz": "hoch", "konflikt": false },
+      "kurve": { "startsignal_im_gueltigen_bereich_10_25": true, "abfall_nach_peak": false, "anmerkung": "post Protamin, Heparinase" } }
+  ],
+  "lesbarkeit_gesamt": "hoch",
+  "warnungen": []
+}</script>
+
+<style>
+  :root{
+    --bg:#eef2f4; --card:#ffffff; --ink:#16242b; --muted:#5e7480;
+    --line:#d7e0e4; --accent:#0d7d8a; --accent-d:#0a626c;
+    --hoch:#c0392b; --niedrig:#2563b8; --ok:#1f8a4c; --warn:#b8740a;
+    --chip:#eaf3f4; --shadow:0 1px 3px rgba(20,40,50,.08),0 6px 22px rgba(20,40,50,.06);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{
+    font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    color:var(--ink); background:var(--bg);
+    padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  .wrap{max-width:640px;margin:0 auto;padding:14px 14px 60px}
+  header.app{display:flex;align-items:center;gap:11px;padding:6px 2px 14px}
+  .logo{width:38px;height:38px;border-radius:10px;background:linear-gradient(135deg,var(--accent),var(--accent-d));
+    flex:0 0 auto;position:relative}
+  .logo svg{position:absolute;inset:0;margin:auto}
+  header.app h1{font-size:18px;margin:0;letter-spacing:.2px}
+  header.app .sub{font-size:12px;color:var(--muted);margin-top:1px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:15px;margin:12px 0;box-shadow:var(--shadow)}
+  .card h2{font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:var(--accent-d);margin:0 0 11px;
+    display:flex;align-items:center;gap:8px}
+  .card h2 .n{width:20px;height:20px;border-radius:50%;background:var(--accent);color:#fff;font-size:12px;
+    display:grid;place-items:center;flex:0 0 auto}
+  label{display:block;font-size:12px;color:var(--muted);margin:10px 0 4px;font-weight:600}
+  input[type=text],input[type=password],input[type=number],select,textarea{
+    width:100%;padding:10px 11px;border:1px solid var(--line);border-radius:10px;background:#fbfdfd;
+    font:inherit;color:var(--ink);-webkit-appearance:none}
+  textarea{resize:vertical;font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}
+  select{background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8'><path d='M1 1l5 5 5-5' stroke='%235e7480' stroke-width='1.6' fill='none'/></svg>");
+    background-repeat:no-repeat;background-position:right 12px center;padding-right:30px}
+  .row{display:flex;gap:10px}.row>*{flex:1;min-width:0}
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;width:100%;
+    padding:13px 16px;border:0;border-radius:11px;background:var(--accent);color:#fff;font:600 15px/1 inherit;
+    cursor:pointer;transition:.15s}
+  .btn:hover{background:var(--accent-d)}.btn:disabled{opacity:.5;cursor:not-allowed}
+  .btn.ghost{background:transparent;color:var(--accent-d);border:1px solid var(--line)}
+  .btn.ghost:hover{background:var(--chip)}
+  .btn.sm{width:auto;padding:9px 13px;font-size:13px}
+  .imgwrap{margin-top:10px;border:1px dashed var(--line);border-radius:11px;overflow:hidden;display:none;background:#f6f9fa}
+  .imgwrap img{display:block;width:100%;max-height:340px;object-fit:contain}
+  .hint{font-size:12px;color:var(--muted);margin-top:8px}
+  .muted{color:var(--muted)}
+  .hidden{display:none!important}
+  .status{font-size:13px;display:flex;align-items:center;gap:9px;margin-top:12px;color:var(--muted)}
+  .spin{width:15px;height:15px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;
+    animation:sp .7s linear infinite;flex:0 0 auto}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .err{background:#fdecec;border:1px solid #f3c0bd;color:#9c2b1f;padding:11px 12px;border-radius:10px;font-size:13px;margin-top:12px}
+  table.vals{width:100%;border-collapse:collapse;margin-top:4px;font-size:13.5px}
+  table.vals th,table.vals td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+  table.vals th{font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);font-weight:600}
+  .mhead{font-weight:700;font-size:13px;margin:14px 0 2px;color:var(--accent-d)}
+  .dir{font-weight:700}
+  .dir.hoch{color:var(--hoch)} .dir.niedrig{color:var(--niedrig)} .dir.nein{color:var(--ok)}
+  .badge{display:inline-block;font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:20px;margin-left:6px;
+    vertical-align:middle;letter-spacing:.3px}
+  .badge.rot{background:#fdeceb;color:var(--hoch)}
+  .badge.konflikt{background:#fff3df;color:var(--warn)}
+  .badge.unsicher{background:#eef0f2;color:var(--muted)}
+  details{margin-top:11px}
+  details>summary{cursor:pointer;font-size:12.5px;color:var(--accent-d);font-weight:600;list-style:none}
+  details>summary::-webkit-details-marker{display:none}
+  details>summary::before{content:"▸ ";color:var(--muted)}
+  details[open]>summary::before{content:"▾ "}
+  .interp h2{font-size:14px;text-transform:none;letter-spacing:0;color:var(--accent-d);
+    border-bottom:1px solid var(--line);padding-bottom:5px;margin:18px 0 8px}
+  .interp h2:first-child{margin-top:0}
+  .interp ul{margin:6px 0 6px;padding-left:20px}.interp li{margin:3px 0}
+  .interp p{margin:7px 0}
+  .interp strong{color:var(--ink)}
+  .closing{margin-top:14px;padding:10px 12px;background:var(--chip);border-radius:10px;font-size:12.5px;color:var(--accent-d);font-style:italic}
+  .disclaimer{font-size:11px;color:var(--muted);text-align:center;margin-top:22px;line-height:1.6}
+  .toolrow{display:flex;gap:9px;margin-top:12px;flex-wrap:wrap}
+  .toolrow .btn{width:auto;flex:1}
+  .keyok{font-size:11px;color:var(--ok);font-weight:600;margin-left:auto}
+  .pill{display:inline-flex;gap:6px;align-items:center;background:var(--chip);border-radius:20px;padding:3px 10px;font-size:11.5px;color:var(--accent-d);font-weight:600}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="app">
+    <div class="logo"><svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+      <path d="M2 14h4l2-8 3 16 3-11 2 5h6" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+    <div>
+      <h1>Sonoclot Interpreter</h1>
+      <div class="sub">Foto → Werte → phasenabhängige Entscheidungsunterstützung</div>
+    </div>
+  </header>
+
+  <!-- BACKEND (Cloudflare Worker) -->
+  <details class="card" id="keyCard">
+    <summary style="cursor:pointer;font-weight:600;font-size:13px;color:var(--accent-d);display:flex;align-items:center;gap:8px">
+      <span>⚙︎ Backend (Cloudflare)</span><span class="keyok hidden" id="keyOk">verbunden ✓</span>
+    </summary>
+    <label for="endpoint">Worker-URL</label>
+    <input type="text" id="endpoint" placeholder="https://sonoclot.&lt;dein-name&gt;.workers.dev" autocomplete="off" spellcheck="false">
+    <label for="appToken">App-Passwort (optional)</label>
+    <input type="password" id="appToken" placeholder="dein APP_TOKEN" autocomplete="off" spellcheck="false">
+    <div class="toolrow">
+      <button class="btn sm" id="saveKey">Speichern</button>
+      <button class="btn sm ghost" id="clearKey">Löschen</button>
+    </div>
+    <div class="hint">Der Anthropic-API-Key liegt <strong>auf Cloudflare</strong> (als Secret), nicht im Browser. Hier nur die Worker-Adresse + optionales App-Passwort — lokal gespeichert (localStorage). Modell: <strong>claude-opus-4-8</strong>.</div>
+  </details>
+
+  <!-- SCHRITT 1: FOTO -->
+  <div class="card">
+    <h2><span class="n">1</span>Foto des Signature-Viewers</h2>
+    <input type="file" id="file" accept="image/*" capture="environment" class="hidden">
+    <button class="btn ghost" id="pick">📷 Foto aufnehmen / wählen</button>
+    <div class="imgwrap" id="imgwrap"><img id="preview" alt="Vorschau"></div>
+    <button class="btn" id="extractBtn" style="margin-top:12px" disabled>Werte auslesen</button>
+    <div class="status hidden" id="exStatus"><span class="spin"></span><span>Lese Werte aus dem Bild…</span></div>
+    <div class="err hidden" id="exErr"></div>
+    <div class="hint">Ein Foto darf den ganzen Verlauf zeigen (Ausgang, unter Heparin, nach Protamin — auch mehrere Messungen). Tabelle + Kurve scharf und frontal, Reflexionen vermeiden.</div>
+  </div>
+
+  <!-- SCHRITT 2: WERTE -->
+  <div class="card">
+    <h2><span class="n">2</span>Ausgelesene Werte <span style="flex:1"></span>
+      <button class="btn sm ghost" id="loadExample" title="Beispielfall laden">Beispiel</button></h2>
+    <div id="valsView"><p class="muted" style="margin:2px 0">Noch keine Werte. Bild auslesen oder „Beispiel" laden.</p></div>
+    <details id="jsonDetails" class="hidden">
+      <summary>JSON ansehen / korrigieren</summary>
+      <div class="hint">Du kannst Werte hier vor der Interpretation korrigieren (z. B. einen Fehl-Lesefehler). Die Interpretation nutzt genau dieses JSON.</div>
+      <textarea id="extractionJson" rows="12" spellcheck="false" style="margin-top:8px"></textarea>
+      <button class="btn sm ghost" id="reparse" style="margin-top:8px">Tabelle aktualisieren</button>
+    </details>
+  </div>
+
+  <!-- SCHRITT 3: KONTEXT (optional) -->
+  <div class="card">
+    <h2><span class="n">3</span>Kontext</h2>
+    <div class="hint" style="margin:-4px 0 8px">Optional — läuft auch ganz ohne Eingabe. Das Modell erkennt die Phasen (Ausgang → Heparin/HLM → post Protamin) selbst aus Testtypen und Zeitstempeln; frühere Messungen im selben Bild dienen automatisch als Baseline.</div>
+    <div class="row">
+      <div><label for="heparin">Heparin gegeben</label><input type="text" id="heparin" placeholder="z. B. 30 000 E"></div>
+      <div><label for="protamin">Protamin gegeben</label><input type="text" id="protamin" placeholder="z. B. 300 mg"></div>
+    </div>
+    <label for="blutung">Blutung</label>
+    <select id="blutung">
+      <option value="nicht angegeben" selected>nicht angegeben</option>
+      <option value="nein">nein</option>
+      <option value="ja">ja</option>
+      <option value="diffus">diffus</option>
+    </select>
+    <details style="margin-top:10px">
+      <summary>Patient (optional)</summary>
+      <div class="row" style="margin-top:6px">
+        <div><label for="alter">Alter</label><input type="text" id="alter" inputmode="numeric" placeholder="Jahre"></div>
+        <div><label for="gewicht">Gewicht</label><input type="text" id="gewicht" inputmode="numeric" placeholder="kg"></div>
+      </div>
+      <div class="row">
+        <div><label for="groesse">Größe</label><input type="text" id="groesse" inputmode="numeric" placeholder="cm"></div>
+        <div><label for="geschlecht">Geschlecht</label>
+          <select id="geschlecht"><option value="">–</option><option value="m">m</option><option value="w">w</option><option value="divers">divers</option></select></div>
+      </div>
+      <div class="hint">Nur grobe Einordnung der Dosis-Größenordnung (Heparin-/Protamin-Verhältnis). Es werden KEINE konkreten Dosen berechnet.</div>
+    </details>
+    <details style="margin-top:6px">
+      <summary>Fokus-Phase (Standard: automatisch)</summary>
+      <select id="phase" style="margin-top:6px">
+        <option value="auto" selected>Automatisch (ganzer Verlauf)</option>
+        <option value="ausgang">Ausgang</option>
+        <option value="an_hlm">An HLM</option>
+        <option value="post_protamin">Post Protamin</option>
+        <option value="intensiv">Intensiv</option>
+      </select>
+    </details>
+    <details style="margin-top:6px">
+      <summary>Hausschwellen (Triemli)</summary>
+      <div class="row" style="margin-top:6px">
+        <div><label for="actziel">ACT-Ziel HLM (s)</label><input type="number" id="actziel" value="400"></div>
+        <div><label for="crschwelle">CR-Heparin-Schwelle</label><input type="number" id="crschwelle" value="6"></div>
+      </div>
+    </details>
+  </div>
+
+  <button class="btn" id="interpretBtn" disabled>Interpretieren</button>
+  <div class="status hidden" id="inStatus"><span class="spin"></span><span>Erstelle Entscheidungsunterstützung…</span></div>
+  <div class="err hidden" id="inErr"></div>
+
+  <!-- ERGEBNIS -->
+  <div class="card interp hidden" id="resultCard">
+    <h2 style="text-transform:uppercase;letter-spacing:.6px;color:var(--accent-d);border:0;padding:0;margin:0 0 6px;font-size:13px">Entscheidungsunterstützung</h2>
+    <div id="interpOut"></div>
+  </div>
+
+  <div class="disclaimer">
+    Entscheidungsunterstützung, kein Medizinprodukt. Nur anonymisierte Gerätebilder.<br>
+    Ärztliche Beurteilung und klinischer Kontext sind immer maßgeblich.
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  const MODEL="claude-opus-4-8";
+  const DEFAULT_ENDPOINT="https://sonoclot.y68xps2sdk.workers.dev";
+  const $=id=>document.getElementById(id);
+  const PROMPT1=$("prompt1").textContent.trim();
+  const PROMPT2_RAW=$("prompt2").textContent.trim();
+  let imgB64=null, imgMime=null;
+
+  /* ---------- Backend (Cloudflare Worker) ---------- */
+  const LS_EP="sonoclot_endpoint", LS_TK="sonoclot_app_token";
+  // localStorage ist in 'data:'-URLs / manchen Sandboxes abgeschaltet -> defensiv kapseln.
+  function lsGet(k){try{return localStorage.getItem(k);}catch(e){return null;}}
+  function lsSet(k,v){try{localStorage.setItem(k,v);}catch(e){}}
+  function lsDel(k){try{localStorage.removeItem(k);}catch(e){}}
+  function loadKey(){
+    $("endpoint").value=lsGet(LS_EP)||DEFAULT_ENDPOINT;
+    $("appToken").value=lsGet(LS_TK)||"";
+    markKey(!!getEndpoint());
+  }
+  function markKey(ok){$("keyOk").classList.toggle("hidden",!ok);if(ok)$("keyCard").open=false;}
+  $("saveKey").onclick=()=>{const ep=$("endpoint").value.trim();
+    if(!ep){alert("Bitte Worker-URL eingeben.");return;}
+    lsSet(LS_EP,ep);lsSet(LS_TK,$("appToken").value.trim());markKey(true);};
+  $("clearKey").onclick=()=>{lsDel(LS_EP);lsDel(LS_TK);
+    $("endpoint").value="";$("appToken").value="";markKey(false);};
+  function getEndpoint(){return ($("endpoint").value||lsGet(LS_EP)||DEFAULT_ENDPOINT).trim();}
+  function getToken(){return ($("appToken").value||lsGet(LS_TK)||"").trim();}
+
+  /* ---------- Bild wählen + herunterskalieren ---------- */
+  $("pick").onclick=()=>$("file").click();
+  $("file").onchange=e=>{const f=e.target.files[0];if(!f)return;downscale(f);};
+  function downscale(file){
+    const r=new FileReader();
+    r.onload=()=>{const img=new Image();
+      img.onload=()=>{
+        const MAX=1600;let{width:w,height:h}=img;
+        if(Math.max(w,h)>MAX){const s=MAX/Math.max(w,h);w=Math.round(w*s);h=Math.round(h*s);}
+        const c=document.createElement("canvas");c.width=w;c.height=h;
+        c.getContext("2d").drawImage(img,0,0,w,h);
+        const url=c.toDataURL("image/jpeg",0.9);
+        imgMime="image/jpeg";imgB64=url.split(",")[1];
+        $("preview").src=url;$("imgwrap").style.display="block";
+        $("extractBtn").disabled=false;
+      };img.src=r.result;};
+    r.readAsDataURL(file);
+  }
+
+  /* ---------- Claude-Aufruf (über Cloudflare Worker) ---------- */
+  async function callClaude(system,content,maxTokens){
+    const ep=getEndpoint();
+    if(!ep){throw new Error("Keine Worker-URL gesetzt. Oben unter ⚙︎ eintragen.");}
+    const headers={"content-type":"application/json"};
+    const tk=getToken(); if(tk) headers["x-app-token"]=tk;
+    const res=await fetch(ep,{method:"POST",headers,
+      body:JSON.stringify({model:MODEL,max_tokens:maxTokens,system,messages:[{role:"user",content}]})});
+    let data; try{data=await res.json();}catch(e){throw new Error("Antwort vom Worker nicht lesbar (HTTP "+res.status+"). URL korrekt?");}
+    if(!res.ok){throw new Error((data&&data.error&&data.error.message)||("HTTP "+res.status));}
+    return (data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("").trim();
+  }
+
+  /* ---------- Schritt 1: Extraktion ---------- */
+  $("extractBtn").onclick=async()=>{
+    if(!imgB64)return;
+    showErr("exErr",null);busy("exStatus","extractBtn",true);
+    try{
+      const txt=await callClaude(PROMPT1,[
+        {type:"image",source:{type:"base64",media_type:imgMime,data:imgB64}},
+        {type:"text",text:"Hier ist das Foto. Es kann mehrere Messungen enthalten. Gib ausschliesslich das JSON gemaess deinen Regeln zurueck."}
+      ],4000);
+      const json=stripJson(txt);
+      JSON.parse(json); // validieren
+      $("extractionJson").value=json;
+      renderVals(json);$("jsonDetails").classList.remove("hidden");
+      $("interpretBtn").disabled=false;
+    }catch(err){showErr("exErr","Extraktion fehlgeschlagen: "+err.message);}
+    finally{busy("exStatus","extractBtn",false);}
+  };
+
+  $("loadExample").onclick=()=>{
+    const ex=$("exampleJson").textContent.trim();
+    $("extractionJson").value=ex;renderVals(ex);
+    $("jsonDetails").classList.remove("hidden");$("interpretBtn").disabled=false;
+    $("phase").value="auto";
+  };
+  $("reparse").onclick=()=>renderVals($("extractionJson").value);
+
+  /* ---------- Werte-Tabelle ---------- */
+  function dirSym(d){return d==="hoch"?"↑":d==="niedrig"?"↓":d==="nein"?"→":"?";}
+  function paramRow(name,p){
+    if(!p)return `<tr><td>${name}</td><td colspan="3" class="muted">—</td></tr>`;
+    const d=p.ausserhalb_norm||"?";
+    const range=(p.range_min!=null?p.range_min:"?")+"–"+(p.range_max!=null?p.range_max:"∞");
+    let badges="";
+    if(p.in_rot)badges+='<span class="badge rot">rot</span>';
+    if(p.konflikt)badges+='<span class="badge konflikt">Konflikt</span>';
+    if(p.wert==null||p.konfidenz==="niedrig")badges+='<span class="badge unsicher">unsicher</span>';
+    return `<tr><td>${name}</td>
+      <td><strong>${p.wert==null?"—":p.wert}</strong>${badges}</td>
+      <td class="muted">${range}</td>
+      <td class="dir ${d}">${dirSym(d)}</td></tr>`;
+  }
+  function renderVals(jsonStr){
+    let o;try{o=JSON.parse(jsonStr);}catch(e){
+      $("valsView").innerHTML='<div class="err">JSON ungültig: '+e.message+'</div>';return;}
+    const ms=o.messungen||[];
+    if(!ms.length){$("valsView").innerHTML='<p class="muted">Keine Messungen im JSON.</p>';return;}
+    let html="";
+    ms.forEach(m=>{
+      const k=m.kurve||{};
+      let kurve="";
+      if(k.startsignal_im_gueltigen_bereich_10_25===false)
+        kurve+=' <span class="badge konflikt">Startsignal fraglich</span>';
+      if(k.abfall_nach_peak)kurve+=' <span class="badge konflikt">Abfall n. Peak</span>';
+      const anm=k.anmerkung?(' · <span class="muted" style="font-weight:400">'+k.anmerkung+'</span>'):"";
+      html+=`<div class="mhead">${m.zeit||""} · ${m.test||"?"} ${m.application?("· "+m.application):""}${kurve}${anm}</div>
+        <table class="vals"><tr><th>Parameter</th><th>Wert</th><th>Range</th><th>Richtung</th></tr>
+        ${paramRow("ACT",m.ACT)}${paramRow("ClotRate",m.ClotRate)}${paramRow("PlateletFunction",m.PlateletFunction)}
+        </table>`;
+    });
+    const w=(o.warnungen||[]);
+    if(w.length)html+='<div class="hint" style="margin-top:10px">⚠︎ '+w.join(" · ")+'</div>';
+    if(o.lesbarkeit_gesamt)html+='<div class="pill" style="margin-top:10px">Lesbarkeit: '+o.lesbarkeit_gesamt+' · '+ms.length+' Messung(en)</div>';
+    $("valsView").innerHTML=html;
+  }
+
+  /* ---------- Schritt 3: Interpretation ---------- */
+  $("interpretBtn").onclick=async()=>{
+    const jsonStr=$("extractionJson").value.trim();
+    if(!jsonStr){showErr("inErr","Keine Werte vorhanden.");return;}
+    try{JSON.parse(jsonStr);}catch(e){showErr("inErr","JSON ungültig: "+e.message);return;}
+    showErr("inErr",null);busy("inStatus","interpretBtn",true);
+    const actziel=$("actziel").value||"400", crschwelle=$("crschwelle").value||"6";
+    const system=PROMPT2_RAW.replace(/ACT_ZIEL_HLM_SEK/g,actziel+" s").replace(/CR_HEPARIN_SCHWELLE/g,crschwelle);
+    const phaseSel=$("phase").value;
+    const patient=[
+      $("alter").value.trim()&&("Alter "+$("alter").value.trim()+" J."),
+      $("geschlecht").value&&("Geschlecht "+$("geschlecht").value),
+      $("groesse").value.trim()&&("Größe "+$("groesse").value.trim()+" cm"),
+      $("gewicht").value.trim()&&("Gewicht "+$("gewicht").value.trim()+" kg")
+    ].filter(Boolean).join(", ");
+    const ctx=[
+      "## extraktion (JSON aus Prompt 1 — kann mehrere Messungen über den Verlauf enthalten)",jsonStr,"",
+      "## kontext (alles optional)",
+      "- fokus_phase: "+(phaseSel==="auto"?"automatisch — Phasen selbst aus Testtyp + Zeitstempel zuordnen":phaseSel),
+      "- heparin_gegeben: "+($("heparin").value.trim()||"nicht angegeben"),
+      "- protamin_gegeben: "+($("protamin").value.trim()||"nicht angegeben"),
+      "- blutung: "+$("blutung").value,
+      "- patient: "+(patient||"nicht angegeben"),
+      "- baseline: im selben Bild enthaltene frühere Messungen automatisch als Baseline nutzen","",
+      "## hausschwellen",
+      "- ACT_ZIEL_HLM_SEK: "+actziel,
+      "- CR_HEPARIN_SCHWELLE: "+crschwelle,"",
+      "Erstelle die strukturierte Entscheidungsunterstützung gemäß deinen Regeln, mit kurzer Zusammenfassung am Schluss."
+    ].join("\n");
+    try{
+      const txt=await callClaude(system,[{type:"text",text:ctx}],4500);
+      $("interpOut").innerHTML=renderMd(txt);
+      $("resultCard").classList.remove("hidden");
+      $("resultCard").scrollIntoView({behavior:"smooth",block:"start"});
+    }catch(err){showErr("inErr","Interpretation fehlgeschlagen: "+err.message);}
+    finally{busy("inStatus","interpretBtn",false);}
+  };
+
+  /* ---------- Helpers ---------- */
+  function stripJson(t){t=t.trim();
+    if(t.startsWith("```")){t=t.replace(/^```[a-zA-Z]*\s*/,"").replace(/```\s*$/,"").trim();}
+    const a=t.indexOf("{"),b=t.lastIndexOf("}");
+    return (a>=0&&b>a)?t.slice(a,b+1):t;}
+  function busy(statusId,btnId,on){
+    $(statusId).classList.toggle("hidden",!on);$(btnId).disabled=on;}
+  function showErr(id,msg){const el=$(id);
+    if(!msg){el.classList.add("hidden");el.textContent="";}
+    else{el.classList.remove("hidden");el.textContent=msg;}}
+  function esc(s){return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
+  function inline(s){return esc(s).replace(/\*\*([^*]+)\*\*/g,"<strong>$1</strong>");}
+  function renderMd(t){
+    const lines=t.split(/\r?\n/);let html="",inList=false,closing="",tbl=[];
+    const flushList=()=>{if(inList){html+="</ul>";inList=false;}};
+    const flushTbl=()=>{
+      if(!tbl.length)return;
+      const rows=tbl.filter(r=>!r.every(c=>/^:?-+:?$/.test(c.trim())));
+      if(rows.length){
+        html+='<table class="vals">';
+        rows.forEach((r,i)=>{const tag=i===0?"th":"td";
+          html+="<tr>"+r.map(c=>"<"+tag+">"+inline(c.trim())+"</"+tag+">").join("")+"</tr>";});
+        html+="</table>";
+      }
+      tbl=[];
+    };
+    for(let raw of lines){
+      const line=raw.trim();
+      if(line.includes("ärztliche Beurteilung und klinischer Kontext")){closing=line.replace(/^[„"]|["']$/g,"");continue;}
+      if(line.startsWith("|")){flushList();tbl.push(line.replace(/^\|/,"").replace(/\|$/,"").split("|"));continue;}
+      flushTbl();
+      if(!line){flushList();continue;}
+      let m;
+      if(m=line.match(/^#{1,6}\s+(.*)/)){flushList();html+="<h2>"+inline(m[1].replace(/^[0-9]+\.\s*/,""))+"</h2>";continue;}
+      if(m=line.match(/^[-*•]\s+(.*)/)){if(!inList){html+="<ul>";inList=true;}html+="<li>"+inline(m[1])+"</li>";continue;}
+      if(m=line.match(/^(\d+)\.\s+(.*)/)){if(!inList){html+="<ul>";inList=true;}html+="<li>"+inline(m[2])+"</li>";continue;}
+      flushList();html+="<p>"+inline(line)+"</p>";
+    }
+    flushList();flushTbl();
+    if(closing)html+='<div class="closing">'+esc(closing)+'</div>';
+    return html;
+  }
+
+  loadKey();
+})();
+</script>
+</body>
+</html>

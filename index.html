@@ -455,12 +455,25 @@ KEINE konkreten Substitutions-/Medikamentendosen berechnen oder nennen. Fehlen d
         {type:"image",source:{type:"base64",media_type:imgMime,data:imgB64}},
         {type:"text",text:"Hier ist das Foto. Es kann mehrere Messungen enthalten. Gib ausschliesslich das JSON gemaess deinen Regeln zurueck."}
       ],4000);
-      const json=stripJson(txt);
-      JSON.parse(json); // validieren
+      let json=stripJson(txt);
+      try{
+        JSON.parse(json);
+      }catch(parseErr){
+        // Versuche einfache Reparaturen
+        if(json.endsWith("]}]")){json=json.slice(0,-1);}
+        else if(json.endsWith("]}")){json=json.slice(0,-1);}
+        try{JSON.parse(json);}catch(_){throw parseErr;}
+      }
       $("extractionJson").value=json;
       renderVals(json);$("jsonDetails").classList.remove("hidden");
       $("interpretBtn").disabled=false;
-    }catch(err){showErr("exErr","Extraktion fehlgeschlagen: "+err.message);}
+    }catch(err){
+      let msg="Extraktion fehlgeschlagen: "+err.message;
+      if(err.message.includes("Parse")||err.message.includes("JSON")||err.message.includes("Unexpected")){
+        msg+=" — Die KI-Antwort möglicherweise unvollständig oder malformed. Bild-Qualität überprüfen oder nochmal versuchen.";
+      }
+      showErr("exErr",msg);
+    }
     finally{busy("exStatus","extractBtn",false);}
   };
 
@@ -550,10 +563,28 @@ KEINE konkreten Substitutions-/Medikamentendosen berechnen oder nennen. Fehlen d
   };
 
   /* ---------- Helpers ---------- */
-  function stripJson(t){t=t.trim();
+  function stripJson(t){
+    t=t.trim();
     if(t.startsWith("```")){t=t.replace(/^```[a-zA-Z]*\s*/,"").replace(/```\s*$/,"").trim();}
-    const a=t.indexOf("{"),b=t.lastIndexOf("}");
-    return (a>=0&&b>a)?t.slice(a,b+1):t;}
+
+    const start=t.indexOf("{");
+    if(start<0)throw new Error("Keine JSON-Object ('{') gefunden");
+
+    let depth=0, inString=false, escaped=false;
+    let end=-1;
+    for(let i=start;i<t.length;i++){
+      const ch=t[i];
+      if(escaped){escaped=false;continue;}
+      if(ch==="\\"){escaped=true;continue;}
+      if(ch==='"'){inString=!inString;continue;}
+      if(inString)continue;
+      if(ch==="{")depth++;
+      else if(ch==="}"){depth--;if(depth===0){end=i;break;}}
+    }
+
+    if(end<0)throw new Error("Kein schließendes '}' gefunden — JSON unvollständig");
+    return t.slice(start,end+1);
+  }
   function busy(statusId,btnId,on){
     $(statusId).classList.toggle("hidden",!on);$(btnId).disabled=on;}
   function showErr(id,msg){const el=$(id);

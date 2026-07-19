@@ -60,7 +60,10 @@ Lies die Kurvengrafik zusätzlich grob mit (Startsignal, Abfall nach Peak).
 7. Verwertbarkeit: Eine Messung ist nur verwertbar, wenn das Start-/Basis-Clot-Signal etwa zwischen 10 und 25 liegt. Startet die Kurve klar außerhalb -> "startsignal_im_gueltigen_bereich_10_25": false.
 8. Kurve grob beschreiben; deutlicher anhaltender Abfall nach dem Peak -> "abfall_nach_peak": true (nur markieren, nicht bewerten). Der typische biphasische Dip-und-Wiederanstieg ist KEIN Abfall im Sinne einer Fibrinolyse.
 9. Reihenfolge der Messungen wie im Bild (oben nach unten) beibehalten — sie entspricht in der Regel der zeitlichen Reihenfolge.
-10. KEINE Interpretation, KEINE Diagnose, KEINE Empfehlung. Nur Extraktion. Nur gültiges JSON.</script>
+10. Nicht lesbare Zeit -> "zeit": null. Die Reihenfolge im Array bleibt trotzdem die Bildreihenfolge.
+11. Teilweise abgeschnittene Zeile (z. B. am Bildrand): nur die sicher lesbaren Felder füllen, den Rest null, und in "warnungen" vermerken. Zeile NICHT weglassen.
+12. Länge: lieber alle Zeilen knapp als wenige ausführlich. Keine Felder erfinden, die im Ausgabeformat nicht vorkommen.
+13. KEINE Interpretation, KEINE Diagnose, KEINE Empfehlung. Nur Extraktion. Nur gültiges JSON.</script>
 
 <script type="text/plain" id="prompt2">Du bist ein Entscheidungs-UNTERSTÜTZER für eine erfahrene Ärztin / einen erfahrenen Arzt in
 Herzchirurgie und Intensivmedizin. Du stellst KEINE Diagnose und triffst KEINE Entscheidung.
@@ -136,12 +139,13 @@ Heparin-Protamin-Verhältnisses nutzen (z. B. „Protamindosis relativ zum Körp
 KEINE konkreten Substitutions-/Medikamentendosen berechnen oder nennen. Fehlen die Daten: ignorieren.
 
 ## Ausgabeformat (Markdown, ## Überschriften, Aufzählungen)
-1. Verlauf & Kontext — eine Zeile: erkannte Phasen/Cluster, Heparin/Protamin, Blutung (oder „nicht angegeben").
-2. Werte des relevanten Clusters — Wert, Range, Richtung, Trend/Delta zur Baseline, Unsicherheits-/Konfliktmarkierung.
-3. Befund/Muster — welche Fragen zutreffen, kurze Begründung.
-4. Erwägungen — priorisierte Vorschläge („erwägen", nicht „geben").
-5. Was fehlt/unsicher — fehlende Tests (z. B. HgbACT), niedrige Konfidenz, Konflikte, Verwertbarkeit, fehlender Kontext.
-6. Zusammenfassung — 2–4 kurze Stichpunkte: Kernmuster + wichtigste 1–2 Erwägungen + größte Unsicherheit. So knapp, dass man sie im OP in ~10 Sekunden liest.
+Die Zusammenfassung steht ZUERST — sie wird im OP unter Zeitdruck gelesen.
+1. Kurzfassung — 2–4 Stichpunkte: Kernmuster + wichtigste 1–2 Erwägungen + größte Unsicherheit. So knapp, dass man sie in ~10 Sekunden liest. Keine Wiederholung der Einzelwerte.
+2. Verlauf & Kontext — eine Zeile: erkannte Phasen/Cluster, Heparin/Protamin, Blutung (oder „nicht angegeben").
+3. Werte des relevanten Clusters — Wert, Range, Richtung, Trend/Delta zur Baseline, Unsicherheits-/Konfliktmarkierung.
+4. Befund/Muster — welche Fragen zutreffen, kurze Begründung.
+5. Erwägungen — priorisierte Vorschläge („erwägen", nicht „geben").
+6. Was fehlt/unsicher — fehlende Tests (z. B. HgbACT), niedrige Konfidenz, Konflikte, Verwertbarkeit, fehlender Kontext.
 7. Abschlusssatz, immer wörtlich: „Entscheidungsunterstützung – ärztliche Beurteilung und klinischer Kontext sind maßgeblich."
 
 ## Sicherheitsregeln (übersteuern alles)
@@ -257,7 +261,12 @@ KEINE konkreten Substitutions-/Medikamentendosen berechnen oder nennen. Fehlen d
   .interp h2{font-size:14px;text-transform:none;letter-spacing:0;color:var(--accent-d);
     border-bottom:1px solid var(--line);padding-bottom:5px;margin:18px 0 8px}
   .interp h2:first-child{margin-top:0}
-  .interp ul{margin:6px 0 6px;padding-left:20px}.interp li{margin:3px 0}
+  .interp ul,.interp ol{margin:6px 0 6px;padding-left:22px}.interp li{margin:3px 0}
+  /* Erste Sektion = Kurzfassung: im OP der Blickfang.
+     Die Liste haengt an der ersten Ueberschrift INNERHALB #interpOut. */
+  #interpOut>h2:first-child+ul,#interpOut>h2:first-child+ol{
+    background:var(--chip);border-left:3px solid var(--accent);border-radius:0 8px 8px 0;
+    padding:10px 12px 10px 30px;margin:8px 0 4px}
   .interp p{margin:7px 0}
   .interp strong{color:var(--ink)}
   .closing{margin-top:14px;padding:10px 12px;background:var(--chip);border-radius:10px;font-size:12.5px;color:var(--accent-d);font-style:italic}
@@ -266,6 +275,27 @@ KEINE konkreten Substitutions-/Medikamentendosen berechnen oder nennen. Fehlen d
   .toolrow .btn{width:auto;flex:1}
   .keyok{font-size:11px;color:var(--ok);font-weight:600;margin-left:auto}
   .pill{display:inline-flex;gap:6px;align-items:center;background:var(--chip);border-radius:20px;padding:3px 10px;font-size:11.5px;color:var(--accent-d);font-weight:600}
+
+  /* Dunkelmodus: nachts im OP weniger blendend. Warnfarben bleiben kraeftig
+     genug, damit "rot"/"Konflikt" erkennbar bleiben.
+     MUSS am Ende stehen — die Element-Overrides haben dieselbe Spezifitaet
+     wie die Basisregeln und gewinnen nur ueber die Reihenfolge. */
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#0f1719; --card:#162124; --ink:#e6eef0; --muted:#93a8b0;
+      --line:#2a3a3f; --accent:#28a5b3; --accent-d:#8fd6de;
+      --hoch:#ff8f80; --niedrig:#7db4ff; --ok:#5cd18c; --warn:#f0b45c;
+      --chip:#1c2b2f; --shadow:0 1px 3px rgba(0,0,0,.4),0 6px 22px rgba(0,0,0,.3);
+    }
+    input[type=text],input[type=password],input[type=number],select,textarea{background:#111b1e}
+    .imgwrap{background:#111b1e}
+    .err{background:#3a1c19;border:1px solid #6b2f28;color:#ffb3a8}
+    .badge.rot{background:#3f1d19}
+    .badge.konflikt{background:#3d2e12}
+    .badge.unsicher{background:#232f33}
+    .card h2 .n{color:#04191c}
+    select{background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8'><path d='M1 1l5 5 5-5' stroke='%2393a8b0' stroke-width='1.6' fill='none'/></svg>")}
+  }
 </style>
 </head>
 <body>
@@ -293,7 +323,7 @@ KEINE konkreten Substitutions-/Medikamentendosen berechnen oder nennen. Fehlen d
       <button class="btn sm" id="saveKey">Speichern</button>
       <button class="btn sm ghost" id="clearKey">Löschen</button>
     </div>
-    <div class="hint">Der Anthropic-API-Key liegt <strong>auf Cloudflare</strong> (als Secret), nicht im Browser. Hier nur die Worker-Adresse + optionales App-Passwort — lokal gespeichert (localStorage). Modell: <strong>claude-sonnet-4-6</strong>.</div>
+    <div class="hint">Der Anthropic-API-Key liegt <strong>auf Cloudflare</strong> (als Secret), nicht im Browser. Hier nur die Worker-Adresse + optionales App-Passwort — lokal gespeichert (localStorage). Modell: <strong id="modelName">claude-sonnet-5</strong>.</div>
   </details>
 
   <!-- SCHRITT 1: FOTO -->
@@ -303,8 +333,8 @@ KEINE konkreten Substitutions-/Medikamentendosen berechnen oder nennen. Fehlen d
     <button class="btn ghost" id="pick">📷 Foto aufnehmen oder Bilddatei wählen</button>
     <div class="imgwrap" id="imgwrap"><img id="preview" alt="Vorschau"></div>
     <button class="btn" id="extractBtn" style="margin-top:12px" disabled>Werte auslesen</button>
-    <div class="status hidden" id="exStatus"><span class="spin"></span><span>Lese Werte aus dem Bild…</span></div>
-    <div class="err hidden" id="exErr"></div>
+    <div class="status hidden" id="exStatus" role="status" aria-live="polite"><span class="spin"></span><span>Lese Werte aus dem Bild…</span></div>
+    <div class="err hidden" id="exErr" role="alert"></div>
     <div class="hint">Ein Foto darf den ganzen Verlauf zeigen (Ausgang, unter Heparin, nach Protamin — auch mehrere Messungen). Tabelle + Kurve scharf und frontal, Reflexionen vermeiden.</div>
   </div>
 
@@ -369,13 +399,17 @@ KEINE konkreten Substitutions-/Medikamentendosen berechnen oder nennen. Fehlen d
   </div>
 
   <button class="btn" id="interpretBtn" disabled>Interpretieren</button>
-  <div class="status hidden" id="inStatus"><span class="spin"></span><span>Erstelle Entscheidungsunterstützung…</span></div>
-  <div class="err hidden" id="inErr"></div>
+  <div class="status hidden" id="inStatus" role="status" aria-live="polite"><span class="spin"></span><span>Erstelle Entscheidungsunterstützung…</span></div>
+  <div class="err hidden" id="inErr" role="alert"></div>
 
   <!-- ERGEBNIS -->
   <div class="card interp hidden" id="resultCard">
     <h2 style="text-transform:uppercase;letter-spacing:.6px;color:var(--accent-d);border:0;padding:0;margin:0 0 6px;font-size:13px">Entscheidungsunterstützung</h2>
     <div id="interpOut"></div>
+    <div class="toolrow">
+      <button class="btn sm ghost" id="copyResult">Text kopieren</button>
+      <button class="btn sm ghost" id="resetAll">Neuer Fall</button>
+    </div>
   </div>
 
   <div class="disclaimer">
@@ -387,7 +421,7 @@ KEINE konkreten Substitutions-/Medikamentendosen berechnen oder nennen. Fehlen d
 <script>
 (function(){
   "use strict";
-  const MODEL="claude-sonnet-4-6";   // Modell hier umstellbar (z. B. "claude-opus-4-8" für maximale Genauigkeit)
+  const MODEL="claude-sonnet-5";   // Modell hier umstellbar (z. B. "claude-opus-4-8" für maximale Genauigkeit)
   const DEFAULT_ENDPOINT="https://sonoclot.y68xps2sdk.workers.dev";
   const $=id=>document.getElementById(id);
   const PROMPT1=$("prompt1").textContent.trim();
@@ -563,11 +597,35 @@ KEINE konkreten Substitutions-/Medikamentendosen berechnen oder nennen. Fehlen d
     ].join("\n");
     try{
       const txt=await callClaude(system,[{type:"text",text:ctx}],4500);
+      lastInterp=txt;
       $("interpOut").innerHTML=renderMd(txt);
       $("resultCard").classList.remove("hidden");
       $("resultCard").scrollIntoView({behavior:"smooth",block:"start"});
     }catch(err){showErr("inErr","Interpretation fehlgeschlagen: "+err.message);}
     finally{busy("inStatus","interpretBtn",false);}
+  };
+
+  /* ---------- Ergebnis kopieren / neuer Fall ---------- */
+  let lastInterp="";
+  $("copyResult").onclick=async()=>{
+    const btn=$("copyResult"), old=btn.textContent;
+    try{ await navigator.clipboard.writeText(lastInterp); btn.textContent="Kopiert ✓"; }
+    catch(e){ btn.textContent="Kopieren nicht möglich"; }
+    setTimeout(()=>{btn.textContent=old;},1600);
+  };
+  $("resetAll").onclick=()=>{
+    // Backend-Einstellungen und Hausschwellen bleiben — nur der Fall wird geleert.
+    imgB64=null;imgMime=null;lastInterp="";
+    $("file").value="";$("preview").removeAttribute("src");$("imgwrap").style.display="none";
+    $("extractBtn").disabled=true;$("interpretBtn").disabled=true;
+    $("extractionJson").value="";
+    $("valsView").innerHTML='<p class="muted" style="margin:2px 0">Noch keine Werte. Bild auslesen oder „Beispiel" laden.</p>';
+    $("jsonDetails").classList.add("hidden");$("jsonDetails").open=false;
+    $("interpOut").innerHTML="";$("resultCard").classList.add("hidden");
+    showErr("exErr",null);showErr("inErr",null);
+    ["heparin","protamin","alter","gewicht","groesse"].forEach(id=>{$(id).value="";});
+    $("blutung").value="nicht angegeben";$("geschlecht").value="";$("phase").value="auto";
+    window.scrollTo({top:0,behavior:"smooth"});
   };
 
   /* ---------- Helpers ---------- */
@@ -599,8 +657,11 @@ KEINE konkreten Substitutions-/Medikamentendosen berechnen oder nennen. Fehlen d
   function esc(s){return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
   function inline(s){return esc(s).replace(/\*\*([^*]+)\*\*/g,"<strong>$1</strong>");}
   function renderMd(t){
-    const lines=t.split(/\r?\n/);let html="",inList=false,closing="",tbl=[];
-    const flushList=()=>{if(inList){html+="</ul>";inList=false;}};
+    const lines=t.split(/\r?\n/);let html="",listTag="",closing="",tbl=[];
+    // listTag ist "" (keine Liste), "ul" oder "ol" — nummerierte Erwaegungen
+    // muessen als <ol> gerendert werden, sonst geht die Priorisierung verloren.
+    const flushList=()=>{if(listTag){html+="</"+listTag+">";listTag="";}};
+    const openList=tag=>{if(listTag!==tag){flushList();html+="<"+tag+">";listTag=tag;}};
     const flushTbl=()=>{
       if(!tbl.length)return;
       const rows=tbl.filter(r=>!r.every(c=>/^:?-+:?$/.test(c.trim())));
@@ -617,11 +678,13 @@ KEINE konkreten Substitutions-/Medikamentendosen berechnen oder nennen. Fehlen d
       if(line.includes("ärztliche Beurteilung und klinischer Kontext")){closing=line.replace(/^[„"]|["']$/g,"");continue;}
       if(line.startsWith("|")){flushList();tbl.push(line.replace(/^\|/,"").replace(/\|$/,"").split("|"));continue;}
       flushTbl();
-      if(!line){flushList();continue;}
+      // Leerzeile beendet die Liste NICHT — sonst zerfaellt eine durch
+      // Leerzeilen getrennte Aufzaehlung in lauter Einzellisten.
+      if(!line)continue;
       let m;
       if(m=line.match(/^#{1,6}\s+(.*)/)){flushList();html+="<h2>"+inline(m[1].replace(/^[0-9]+\.\s*/,""))+"</h2>";continue;}
-      if(m=line.match(/^[-*•]\s+(.*)/)){if(!inList){html+="<ul>";inList=true;}html+="<li>"+inline(m[1])+"</li>";continue;}
-      if(m=line.match(/^(\d+)\.\s+(.*)/)){if(!inList){html+="<ul>";inList=true;}html+="<li>"+inline(m[2])+"</li>";continue;}
+      if(m=line.match(/^[-*•]\s+(.*)/)){openList("ul");html+="<li>"+inline(m[1])+"</li>";continue;}
+      if(m=line.match(/^(\d+)\.\s+(.*)/)){openList("ol");html+="<li>"+inline(m[2])+"</li>";continue;}
       flushList();html+="<p>"+inline(line)+"</p>";
     }
     flushList();flushTbl();
@@ -629,6 +692,7 @@ KEINE konkreten Substitutions-/Medikamentendosen berechnen oder nennen. Fehlen d
     return html;
   }
 
+  $("modelName").textContent=MODEL;   // Anzeige folgt der Konstante, kein Drift
   loadKey();
 })();
 </script>
